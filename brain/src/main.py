@@ -19,7 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def serve():
-    port = os.getenv("GRPC_PORT", "50051")
+    port = os.getenv("PORT", "50051")
 
     server=grpc.aio.server()
     aether_pb2_grpc.add_RagServiceServicer_to_server(RagServices(), server)
