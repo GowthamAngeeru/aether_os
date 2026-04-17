@@ -1,0 +1,28 @@
+syntax = "proto3";
+package aether;
+
+service RagService {
+  rpc Generate(GenerateRequest) returns (stream GenerateResponse);
+  
+  rpc HealthCheck(HealthRequest) returns (HealthResponse);
+}
+
+message GenerateRequest {
+  string prompt     = 1; 
+  string request_id = 2;
+  int32  max_tokens = 3;  
+}
+
+message GenerateResponse {
+  string token      = 1;  
+  bool   is_final   = 2; 
+  string request_id = 3;  
+  string full_text  = 4;  
+}
+
+message HealthRequest  { string caller = 1; }
+message HealthResponse {
+  bool   healthy  = 1;
+  string version  = 2;
+  string model    = 3;
+}

@@ -1,0 +1,13 @@
+# Python caches
+__pycache__/
+*.pyc
+
+# Virtual Environment
+venv/
+
+# NEVER COMMIT SECRETS
+.env
+
+# Generated Protocol Buffers
+src/*_pb2.py
+src/*_pb2_grpc.py

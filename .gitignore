@@ -1,0 +1,19 @@
+# Rust
+target/
+Cargo.lock
+
+# Python
+brain/venv/
+brain/__pycache__/
+*.pyc
+
+# Next.js
+web_ui/node_modules/
+web_ui/.next/
+web_ui/.env.local
+
+# Data, Models, and DB Volumes
+onnxruntime.dll
+onnxruntime_providers_shared.dll
+data/
+qdrant_data/
