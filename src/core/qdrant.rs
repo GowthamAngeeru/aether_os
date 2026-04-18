@@ -25,7 +25,19 @@ impl VectorDB {
     pub async fn new(url: &str, collection_name: &str) -> Result<Self> {
         info!(url = %url, collection = %collection_name, "qdrant_connecting");
 
-        let client = Qdrant::from_url(url)
+        // 1. Grab the API key from the environment
+        let api_key = std::env::var("QDRANT_API_KEY").unwrap_or_default();
+
+        // 2. Initialize the builder
+        let mut builder = Qdrant::from_url(url);
+        
+        // 3. Inject the API key if it exists
+        if !api_key.is_empty() {
+            builder = builder.api_key(api_key);
+        }
+
+        // 4. Build the client
+        let client = builder
             .build()
             .context("Failed to build Qdrant client")?;
 
