@@ -34,7 +34,7 @@ ort = { version = "=2.0.0-rc.11", features = ["load-dynamic"] }
 ndarray   = "0.16"
 
 # ── Database & Serialization ───────────────────────────────────
-redis = { version = "0.25", features = ["tokio-comp", "tokio-rustls-comp"] }
+redis = { version = "0.25", features = ["tokio-comp", "tokio-rustls-comp", "connection-manager"] }
 bincode = "1.3"
 qdrant-client = "1.11"
 
