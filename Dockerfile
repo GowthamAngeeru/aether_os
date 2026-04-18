@@ -1,5 +1,5 @@
 # Phase 1: The Build Environment
-FROM rust:1.75-slim-bookworm as builder
+FROM rust:slim-bookworm as builder
 WORKDIR /usr/src/app
 
 # Install the C-compilers and Protobuf tools needed to compile the gRPC bridge
