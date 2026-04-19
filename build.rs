@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure()
         .build_server(false)
         .build_client(true)
-        .compile(&["brain/proto/aether.proto"], &["brain/proto"])
+        .compile_protos(&["brain/proto/aether.proto"], &["brain/proto"])
         .map_err(|e| {
             format!(
                 "tonic_build failed to compile brain/proto/aether.proto: {}\n\

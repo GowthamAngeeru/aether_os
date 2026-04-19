@@ -161,6 +161,22 @@ async fn build_state(config: Arc<AppConfig>) -> anyhow::Result<AppState> {
 
     info!("grpc_client_connected");
 
+    let keepalive_client = rag_client.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(14 * 60));
+        loop {
+            interval.tick().await;
+            let mut client = keepalive_client.clone();
+            // Send a lightweight health check ping
+            let _ = client
+                .health_check(tonic::Request::new(crate::grpc::aether::HealthRequest {
+                    caller: "rust_keepalive".to_string(),
+                }))
+                .await;
+            tracing::debug!("brain_keepalive_ping_sent");
+        }
+    });
+
     let qdrant_url =
         std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
 
