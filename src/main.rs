@@ -11,7 +11,7 @@ use axum::middleware as axum_middleware;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tonic::transport::Channel;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -192,23 +192,28 @@ async fn build_state(config: Arc<AppConfig>) -> anyhow::Result<AppState> {
 
 // FIX: Update signature to expect Arc<AppState>
 fn build_router(state: Arc<AppState>) -> axum::Router {
-    use tower_http::cors::Any;
-    use tower_http::trace::TraceLayer; // <-- We need the 'Any' struct
+    use axum::http::HeaderName;
+    use axum::http::{header, HeaderValue, Method}; // <-- Import explicit headers
+    use tower_http::trace::TraceLayer;
 
     let rate_limiter = Arc::clone(&state.rate_limiter);
 
     let frontend_url =
         std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
 
-    // Secure the Origin, but allow any Headers (like 'Accept' for SSE) and Methods
+    let origin = frontend_url
+        .parse::<HeaderValue>()
+        .expect("Invalid FRONTEND_URL");
+
     let cors = CorsLayer::new()
-        .allow_origin(
-            frontend_url
-                .parse::<axum::http::HeaderValue>()
-                .expect("Invalid FRONTEND_URL"),
-        )
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(origin)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            header::ACCEPT,
+            HeaderName::from_static("x-request-id"),
+        ]);
 
     api::routes::create_router()
         .layer(axum_middleware::from_fn_with_state(
