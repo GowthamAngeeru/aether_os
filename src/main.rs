@@ -6,13 +6,10 @@ mod grpc;
 pub mod handlers;
 pub mod middleware;
 
-use axum::http::{HeaderName, Method};
 use axum::middleware as axum_middleware;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tonic::transport::Channel;
-use tower_http::cors::{Any, CorsLayer};
-use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -192,16 +189,27 @@ async fn build_state(config: Arc<AppConfig>) -> anyhow::Result<AppState> {
 
 // FIX: Update signature to expect Arc<AppState>
 fn build_router(state: Arc<AppState>) -> axum::Router {
-    use tower_http::cors::{Any, CorsLayer};
-    use tower_http::trace::TraceLayer; // <-- Import 'Any'
+    use axum::http::header;
+    use axum::http::HeaderValue;
+    use axum::http::Method;
+    use tower_http::cors::CorsLayer;
+    use tower_http::trace::TraceLayer;
 
     let rate_limiter = Arc::clone(&state.rate_limiter);
 
-    // The Nuclear Option: Allow absolutely any origin, method, and header
+    let frontend_url =
+        std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
+
+    let origin = frontend_url
+        .parse::<HeaderValue>()
+        .expect("Invalid FRONTEND_URL");
+
+    // The Production Enterprise CORS Policy
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(origin) // Explicit exact match
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
+        .allow_credentials(true); // <--- THE MISSING GOLDEN KEY
 
     api::routes::create_router()
         .layer(axum_middleware::from_fn_with_state(
@@ -209,7 +217,7 @@ fn build_router(state: Arc<AppState>) -> axum::Router {
             rate_limit_middleware,
         ))
         .layer(TraceLayer::new_for_http())
-        .layer(cors)
+        .layer(cors) // CORS processes first
         .with_state(state)
 }
 
