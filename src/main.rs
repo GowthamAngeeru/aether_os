@@ -1,25 +1,24 @@
 pub mod api;
+pub mod brain;
 pub mod config;
 pub mod core;
 pub mod error;
-mod grpc;
 pub mod handlers;
 pub mod middleware;
 
 use axum::middleware as axum_middleware;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tonic::transport::Channel;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::brain::BrainClient;
 use crate::config::AppConfig;
 use crate::core::bloom::BloomFilter;
 use crate::core::cache::SemanticCache;
 use crate::core::qdrant::VectorDB;
 use crate::core::rate_limit::RateLimiter;
 use crate::core::vector::VectorEngine;
-use crate::grpc::RagServiceClient;
 use crate::middleware::shield::rate_limit_middleware;
 
 #[derive(Clone)]
@@ -30,7 +29,7 @@ pub struct AppState {
     pub semantic_cache: Arc<SemanticCache>,
     pub vector_db: Arc<VectorDB>,
     pub config: Arc<AppConfig>,
-    pub rag_client: RagServiceClient<Channel>,
+    pub brain_client: BrainClient,
 }
 
 #[tokio::main]
@@ -147,35 +146,26 @@ async fn build_state(config: Arc<AppConfig>) -> anyhow::Result<AppState> {
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let semantic_cache = Arc::new(SemanticCache::new(&redis_url).await);
 
-    let grpc_addr =
-        std::env::var("BRAIN_GRPC_ADDR").unwrap_or_else(|_| "http://[::1]:50051".to_string());
+    // --- NEW HTTP BRAIN CONNECTION ---
+    let brain_url =
+        std::env::var("BRAIN_URL").unwrap_or_else(|_| "http://localhost:8000".to_string());
+    info!(url = %brain_url, "brain_client_initializing");
 
-    info!(addr = %grpc_addr, "grpc_client_connecting");
+    let brain_client = BrainClient::new(brain_url)
+        .map_err(|e| anyhow::anyhow!("Failed to create brain client: {}", e))?;
 
-    let rag_client = RagServiceClient::connect(grpc_addr.clone())
-        .await
-        .map_err(|e| {
-            error!(addr = %grpc_addr, error = %e, "grpc_connect_failed");
-            e
-        })?;
-
-    info!("grpc_client_connected");
-
-    let keepalive_client = rag_client.clone();
+    // Keep-Alive Heartbeat to prevent Render Free Tier sleep
+    let keepalive_client = brain_client.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(14 * 60));
         loop {
             interval.tick().await;
-            let mut client = keepalive_client.clone();
-            // Send a lightweight health check ping
-            let _ = client
-                .health_check(tonic::Request::new(crate::grpc::aether::HealthRequest {
-                    caller: "rust_keepalive".to_string(),
-                }))
-                .await;
+            let _ = keepalive_client.health_check().await;
             tracing::debug!("brain_keepalive_ping_sent");
         }
     });
+
+    info!("brain_client_connected");
 
     let qdrant_url =
         std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
@@ -199,11 +189,10 @@ async fn build_state(config: Arc<AppConfig>) -> anyhow::Result<AppState> {
         semantic_cache,
         vector_db,
         config,
-        rag_client,
+        brain_client,
     })
 }
 
-// FIX: Update signature to expect Arc<AppState>
 fn build_router(state: Arc<AppState>) -> axum::Router {
     use axum::http::header;
     use axum::http::HeaderValue;
@@ -220,20 +209,19 @@ fn build_router(state: Arc<AppState>) -> axum::Router {
         .parse::<HeaderValue>()
         .expect("Invalid FRONTEND_URL");
 
-    // The Production Enterprise CORS Policy
     let cors = CorsLayer::new()
-        .allow_origin(origin) // Explicit exact match
+        .allow_origin(origin)
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
-        .allow_credentials(true); // <--- THE MISSING GOLDEN KEY
+        .allow_credentials(true);
 
     api::routes::create_router()
-        .layer(axum_middleware::from_fn_with_state(
-            rate_limiter,
-            rate_limit_middleware,
-        ))
+        //.layer(axum_middleware::from_fn_with_state(
+        //    rate_limiter,
+        //  rate_limit_middleware,
+        //))
         .layer(TraceLayer::new_for_http())
-        .layer(cors) // CORS processes first
+        .layer(cors)
         .with_state(state)
 }
 

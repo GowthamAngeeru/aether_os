@@ -1,0 +1,6 @@
+{
+  "cache_hit_rate": 0.17584745762711865,
+  "cache_hit_p95_ms": 564.9999999999994,
+  "cache_hit_avg_ms": 164.16867469879517,
+  "total_requests": 472
+}

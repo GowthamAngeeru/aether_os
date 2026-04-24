@@ -38,19 +38,13 @@ redis = { version = "0.25", features = ["tokio-comp", "tokio-rustls-comp", "conn
 bincode = "1.3"
 qdrant-client = "1.11"
 
-# ── gRPC & Protobufs ───────────────────────────────────────────
-tonic = { version = "0.12", features = ["transport"] }
-prost = "0.13"
+# ── HTTP Client (Replaces gRPC) ────────────────────────────────
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # ── Streams (SSE Support) ──────────────────────────────────────
 async-stream = "0.3"
 futures      = "0.3"
 futures-util = "0.3"
-
-# ── Build Dependencies ─────────────────────────────────────────
-[build-dependencies]
-tonic-build = "0.12"
-protoc-bin-vendored = "3"
 
 # ── Target Definitions ─────────────────────────────────────────
 [[bin]]
