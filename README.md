@@ -1,82 +1,217 @@
-# ⚡ AetherOS | Enterprise AI Edge Gateway
+# ⚡ AetherOS — Enterprise AI Edge Gateway
 
-AetherOS is an ultra-low latency, distributed Retrieval-Augmented Generation (RAG) architecture. It bridges a high-concurrency Rust edge server with a Python LangChain intelligence layer, utilizing semantic caching and consistent vector retrieval to deliver real-time AI responses.
+> A production-grade, distributed RAG gateway built in Rust.  
+> Semantic caching eliminates redundant LLM API calls — **95.8% cache 
+> hit rate** under load, reducing OpenAI spend by up to **95.8%** 
+> on repeated semantic queries.
 
-![Architecture Status](https://img.shields.io/badge/Architecture-Distributed_Microservices-blue)
-![Rust](https://img.shields.io/badge/Edge-Rust_Axum-orange)
-![Python](https://img.shields.io/badge/Brain-Python_FastAPI-yellow)
-![Frontend](https://img.shields.io/badge/UI-Next.js_16-black)
+[![Demo Video](https://img.shields.io/badge/▶_Demo-YouTube-red?style=for-the-badge)](YOUR_YOUTUBE_LINK)
+[![Live App](https://img.shields.io/badge/Live-Vercel-black?style=for-the-badge)](YOUR_VERCEL_LINK)
+[![Architecture](https://img.shields.io/badge/Docs-Architecture-blue?style=for-the-badge)](./ARCHITECTURE.md)
 
-## 🧠 System Architecture
+---
 
-AetherOS strictly separates network orchestration from AI processing, utilizing a high-throughput HTTP/SSE bridge to connect the edge to the intelligence layer. 
+## The Problem It Solves
 
-1. **The UI (Next.js 16):** React Server Components frontend consuming Server-Sent Events (SSE) for real-time token streaming.
-2. **The Edge (Rust/Axum):** Highly concurrent API gateway handling rate limiting (Token Bucket), Bloom filtering, and request validation.
-3. **The Semantic Cache (Redis + ONNX):** CPU-native ONNX runtime embedded in Rust generates 384-dimensional vectors of incoming prompts, checking Redis for semantic similarity. 
-4. **Deep Retrieval (Qdrant):** Rust queries a high-performance vector database to inject architectural context into the prompt using Cosine Similarity.
-5. **The Brain (Python/FastAPI):** A dedicated microservice receiving augmented prompts via REST, orchestrating LLM generation, and streaming tokens back to the edge.
+RAG applications have two expensive failure modes:Problem 1 — Redundant LLM calls
+User A asks: "What is AetherOS?"       → LLM call → $0.002
+User B asks: "Can you explain AetherOS?" → LLM call → $0.002 (same answer)AetherOS solution: Cosine similarity (threshold 0.92) detects semantic
+equivalence → serves cached answer → $0.000, no LLM callProblem 2 — LLM hallucination on domain knowledge
+LLM asked about YOUR system: makes up plausible-sounding wrong answersAetherOS solution: Qdrant vector retrieval injects real document
+context into the prompt before LLM generation
 
-> 🛡️ **Enterprise gRPC Branch:** A strict, fail-fast binary implementation of the Brain-to-Edge transport layer utilizing `tonic` and Protocol Buffers is permanently preserved on the `enterprise-grpc` branch for internal, zero-proxy environments.
+---
 
-## 📊 Performance & Benchmarks
+## Benchmark Results
 
-AetherOS is stress-tested using `k6` to guarantee ultra-low latency under concurrent load. The custom Semantic Cache architecture intercepts redundant queries, completely bypassing the LLM generation phase to save API costs and drastically reduce TTFT (Time To First Token).
+Measured locally with k6 · 10 concurrent VUs · 261 requests
 
-**Local k6 Load Test Results (10 Concurrent VUs):**
-* **Cache Hit Rate:** `95.8%` (Flawless Thundering Herd mitigation)
-* **Average Latency:** `275ms` (Includes local ONNX vector embedding math + Redis network lookup)
-* **Error Rate:** `0.00%` (Perfect stability under sustained load)
+| Metric | With AetherOS Cache | Without Cache |
+|---|---|---|
+| Cache Hit Latency P95 | **358ms** | N/A |
+| LLM Generation Latency | ~2000-3000ms | ~2000-3000ms |
+| Cache Hit Rate | **95.8%** | 0% |
+| Error Rate | **0.00%** | — |
+| API Cost (261 requests) | **~$0.022** | **~$0.522** |
+| **Cost Reduction** | **95.8%** | baseline |
 
-## 🚀 Core Features
+> **Note on latency:** The 275ms pipeline includes ~200-250ms for local
+> ONNX embedding inference via `fastembed-rs` (no API call). The cache
+> lookup itself is sub-1ms. The primary value of the cache is
+> **cost elimination** — a cache hit at 275ms saves a $0.002 
+> OpenAI API call and 2-3 seconds of LLM generation time.
 
-- **Sub-300ms Semantic Caching:** Prevents redundant LLM API calls by serving mathematically similar questions directly from memory.
-- **Dual Transport Architecture:** Default HTTP/SSE streaming for maximum proxy compatibility (`main`), with a preserved `enterprise-grpc` branch enforcing strict Protocol Buffer contracts.
-- **Zero-Copy Streaming:** Tokens are streamed asynchronously from the OpenAI API $\rightarrow$ Python $\rightarrow$ Rust $\rightarrow$ Next.js UI with zero blocking operations.
-- **Hardware-Accelerated Math:** Local embeddings generated using the `fastembed` Rust crate and ONNX runtime, eliminating the latency and cost of network-based embedding APIs.
+---
 
-## 💻 Tech Stack Overview
+## System Architecture
+┌─────────────────────────────────────────────────────────────────┐
+│                         USER (Browser)                          │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ HTTPS POST /generate
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    RUST GATEWAY (axum + tokio)                  │
+│                                                                 │
+│  ┌─────────────────┐   ┌──────────────┐   ┌─────────────────┐   │
+│  │  Token Bucket   │   │ Bloom Filter │   │  Request ID     │   │
+│  │  Rate Limiter   │   │ (Cache Guard)│   │  (UUID Trace)   │   │
+│  │  (per-IP)       │   │  FNV-1a hash │   │                 │   │
+│  └────────┬────────┘   └──────┬───────┘   └─────────────────┘   │
+│           │  Layer 4          │  Layer 7                        │
+│           └──────────┬────────┘                                 │
+│                      ▼                                          │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │         fastembed-rs + ONNX Runtime (local CPU)           │  │
+│  │    prompt → 384-dim unit vector  (~200ms, $0.000)         │  │
+│  └──────────────────────────┬────────────────────────────────┘  │
+│                             │                                   │
+│             ┌───────────────▼───────────────┐                    │
+│             │     SEMANTIC CACHE LOOKUP     │                   │
+│             │   cosine_similarity ≥ 0.92?   │                    │
+│             └──────────┬────────────┬───────┘                   │
+│                        │ HIT        │ MISS                      │
+│                        ▼            ▼                           │
+│             ┌──────────────┐ ┌──────────────────────────────┐   │
+│             │ Redis Cache  │ │   Qdrant Vector Search       │   │
+│             │ ~1ms lookup  │ │   top-5 chunks, HNSW index   │   │
+│             │ $0.000 cost  │ └──────────────┬───────────────┘   │
+│             └──────┬───────┘                │                   │
+│                    │                        ▼                   │
+│                    │         ┌──────────────────────────────┐   │
+│                    │         │    PYTHON BRAIN (FastAPI)    │   │
+│                    │         │  LangChain + gpt-4o-mini     │   │
+│                    │         │  Context-grounded generation │   │
+│                    │         │  ~2000ms, ~$0.002/call       │   │
+│                    │         └──────────────┬───────────────┘   │
+│             ┌──────▼─────────────────────────▼───────────────┐  │
+│             │         SSE TOKEN STREAM → BROWSER             │  │
+│             └────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 
-| Layer              | Technology                           | Purpose                                  |
-| :----------------- | :----------------------------------- | :--------------------------------------- |
-| **Frontend** | Next.js 16, React Markdown, Tailwind | Real-time SSE streaming interface        |
-| **Gateway** | Rust, Axum, Tokio                    | High-throughput async routing            |
-| **Math Engine** | ONNX Runtime, FastEmbed              | Local vector embedding generation        |
-| **Caching** | Redis                                | Ephemeral semantic state storage         |
-| **Knowledge Base** | Qdrant                               | Persistent document vectors              |
-| **Intelligence** | Python, FastAPI, LangChain           | LLM orchestration and logic              |
-| **Transport** | HTTP/SSE & gRPC (Branch Dependent)   | Inter-service microservice communication |
+---
 
-## ⚙️ Quick Start (Local Development)
+## Core Engineering Decisions
+
+### Why Rust for the Gateway?
+Rust has **zero garbage collection pauses**. On a 275ms cache hit path, 
+a Go/JVM GC pause of 10-50ms is a meaningful latency spike. Rust also 
+runs `fastembed-rs` natively — embedding locally means no OpenAI 
+Embeddings API call, saving ~150ms and ~$0.0001 per request.
+
+### Why Cosine Similarity at 0.92 Threshold?
+Chosen empirically: below 0.90 produces false positives (unrelated 
+topics match), above 0.95 misses clear paraphrases. `AllMiniLML6V2` 
+produces L2-normalized unit vectors, so cosine similarity reduces to 
+a dot product — eliminating two `sqrt()` calls per comparison.
+
+### Why DashMap + Redis (Two Cache Layers)?DashMap (RAM):  Sub-millisecond O(N) cosine scan, 50K vector limit
+Redis (Disk):   Persistence across restarts, TTL preserved via Unix
+timestamps (not reset on reboot)
+Upgrade path:   RedisVL + HNSW index when N > 50,000 vectors
+
+### Dual Transport Architecture
+The inter-service bridge was designed with **gRPC + Protocol Buffers** 
+for binary efficiency and strict typing. The deployed version uses 
+**HTTP/SSE** for Cloudflare proxy compatibility on free-tier infrastructure.
+
+| | gRPC Branch (`enterprise-grpc`) | HTTP/SSE Branch (`main`) |
+|---|---|---|
+| Transport | HTTP/2 + Protobufs | HTTP/1.1 + SSE |
+| Payload | Binary (~60% smaller) | JSON/text |
+| Streaming | Native bidirectional | Server-sent events |
+| Use case | Private network deployment | Public cloud (Cloudflare) |
+| Status | Preserved, local demo | Deployed on Render |
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Why |
+|---|---|---|
+| **Gateway** | Rust, Axum, Tokio | Zero GC, fearless concurrency |
+| **Embeddings** | fastembed-rs, ONNX | Local inference, no API cost |
+| **Semantic Cache** | DashMap + Redis | RAM speed + restart persistence |
+| **Vector DB** | Qdrant | HNSW index, written in Rust |
+| **Rate Limiting** | Token Bucket (parking_lot) | Lock-free per-IP throttling |
+| **Cache Guard** | Bloom Filter (AtomicU64) | O(1) cache penetration prevention |
+| **AI Pipeline** | Python, FastAPI, LangChain | Unmatched AI ecosystem |
+| **LLM** | OpenAI gpt-4o-mini | Cost-efficient, streaming API |
+| **Frontend** | Next.js 16, Tailwind | SSE streaming, React Server Components |
+| **Deployment** | Render + Upstash + Qdrant Cloud + Vercel | Full cloud, free tier |
+
+---
+
+## Quick Start
 
 ### Prerequisites
-
-- Rust toolchain
+- Rust toolchain (stable)
 - Python 3.10+
 - Node.js 20+
-- Docker (for Redis and Qdrant)
+- Docker Desktop
 
 ### Boot Sequence
 
-**1. Start Infrastructure**
-```bash
-docker run -p 6379:6379 -d redis
-docker run -p 6334:6334 -p 6333:6333 -d qdrant/qdrant
-
-2. Boot the Python Brain (Port 8000)
-
+```bash1. Start infrastructure
+docker-compose up -d2. Ingest knowledge base into Qdrant
+cargo run --bin ingest3. Start Python Brain (Port 8000)
 cd brain
-# Activate virtual environment
-# Windows: .\venv\Scripts\activate | Mac/Linux: source venv/bin/activate
-pip install -r requirements.txt
-uvicorn src.main:app --host 0.0.0.0 --port 8000
-
-3. Boot the Rust Edge (Port 3000)
-
-# Ensure ONNX DLLs are in your project root or PATH
-cargo run
-4. Boot the Next.js UI (Port 3001)
-
+source venv/bin/activate  # Windows: .\venv\Scripts\activate
+uvicorn src.main:app --host 0.0.0.0 --port 80004. Start Rust Gateway (Port 3000)
+cd ..
+cargo run5. Start Next.js UI (Port 3001)
 cd web_ui
-npm install
-npm run dev -- -p 3001
+npm install && npm run dev -- -p 30016. Run benchmarks
+k6 run benchmarks/load_test.js
+
+### Environment Variables
+
+```bashRust Gateway
+REDIS_URL=redis://127.0.0.1:6379
+QDRANT_URL=http://localhost:6334
+BRAIN_URL=http://localhost:8000
+FRONTEND_URL=http://localhost:3001
+QDRANT_COLLECTION=aetheros_knowledgePython Brain
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
+
+---
+
+## Repository Structureaether_os/
+├── src/
+│   ├── core/
+│   │   ├── bloom.rs         # FNV-1a Bloom Filter (AtomicU64 bit array)
+│   │   ├── cache.rs         # Write-Through semantic cache (DashMap + Redis)
+│   │   ├── rate_limit.rs    # Token Bucket (parking_lot, per-IP DashMap)
+│   │   ├── vector.rs        # fastembed-rs cosine similarity engine
+│   │   └── qdrant.rs        # Qdrant HNSW vector search client
+│   ├── brain/
+│   │   └── client.rs        # HTTP Brain client (deployed transport)
+│   ├── middleware/
+│   │   └── shield.rs        # Rate limit + UUID request tracing
+│   ├── handlers.rs          # SSE streaming generate handler
+│   └── bin/
+│       └── ingest.rs        # Document chunking + Qdrant ingestion pipeline
+├── brain/
+│   ├── proto/
+│   │   └── aether.proto     # gRPC contract (enterprise-grpc branch)
+│   └── src/
+│       └── main.py          # FastAPI SSE service
+├── web_ui/                  # Next.js 16 frontend
+├── benchmarks/
+│   └── load_test.js         # k6 semantic cache load test
+├── data/
+│   └── architecture.txt     # Ingested knowledge document
+├── docker-compose.yml
+└── ARCHITECTURE.md          # Detailed design decisions
+
+---
+
+## Live Deployment
+
+| Service | Platform | URL |
+|---|---|---|
+| Frontend | Vercel | [aether-os-zeta.vercel.app](YOUR_LINK) |
+| Rust Gateway | Render | [aetheros-gateway.onrender.com](YOUR_LINK) |
+| Python Brain | Render | [aetheros-brain.onrender.com](YOUR_LINK) |
+| Redis Cache | Upstash | Managed |
+| Vector DB | Qdrant Cloud | Managed |

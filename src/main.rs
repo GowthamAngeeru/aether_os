@@ -193,37 +193,37 @@ async fn build_state(config: Arc<AppConfig>) -> anyhow::Result<AppState> {
     })
 }
 
-fn build_router(state: Arc<AppState>) -> axum::Router {
-    use axum::http::header;
-    use axum::http::HeaderValue;
-    use axum::http::Method;
-    use tower_http::cors::CorsLayer;
-    use tower_http::trace::TraceLayer;
+    fn build_router(state: Arc<AppState>) -> axum::Router {
+        use axum::http::header;
+        use axum::http::HeaderValue;
+        use axum::http::Method;
+        use tower_http::cors::CorsLayer;
+        use tower_http::trace::TraceLayer;
 
-    let rate_limiter = Arc::clone(&state.rate_limiter);
+        let rate_limiter = Arc::clone(&state.rate_limiter);
 
-    let frontend_url =
-        std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
+        let frontend_url =
+            std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
 
-    let origin = frontend_url
-        .parse::<HeaderValue>()
-        .expect("Invalid FRONTEND_URL");
+        let origin = frontend_url
+            .parse::<HeaderValue>()
+            .expect("Invalid FRONTEND_URL");
 
-    let cors = CorsLayer::new()
-        .allow_origin(origin)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
-        .allow_credentials(true);
+        let cors = CorsLayer::new()
+            .allow_origin(origin)
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
+            .allow_credentials(true);
 
-    api::routes::create_router()
-        //.layer(axum_middleware::from_fn_with_state(
-        //    rate_limiter,
-        //  rate_limit_middleware,
-        //))
-        .layer(TraceLayer::new_for_http())
-        .layer(cors)
-        .with_state(state)
-}
+        api::routes::create_router()
+            //.layer(axum_middleware::from_fn_with_state(
+            //    rate_limiter,
+            //  rate_limit_middleware,
+            //))
+            .layer(TraceLayer::new_for_http())
+            .layer(cors)
+            .with_state(state)
+    }
 
 async fn shutdown_signal() {
     let ctrl_c = async {
