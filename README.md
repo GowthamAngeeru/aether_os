@@ -1,8 +1,8 @@
 # ⚡ AetherOS — Enterprise AI Edge Gateway
 
 > A production-grade, distributed RAG gateway built in Rust.  
-> Semantic caching eliminates redundant LLM API calls — **95.8% cache 
-> hit rate** under load, reducing OpenAI spend by up to **95.8%** 
+> Semantic caching eliminates redundant LLM API calls — **95.8% cache
+> hit rate** under load, reducing OpenAI spend by up to **95.8%**
 > on repeated semantic queries.
 
 [![Demo Video](https://img.shields.io/badge/▶_Demo-YouTube-red?style=for-the-badge)](YOUR_YOUTUBE_LINK)
@@ -14,7 +14,7 @@
 ## The Problem It Solves
 
 RAG applications have two expensive failure modes:Problem 1 — Redundant LLM calls
-User A asks: "What is AetherOS?"       → LLM call → $0.002
+User A asks: "What is AetherOS?" → LLM call → $0.002
 User B asks: "Can you explain AetherOS?" → LLM call → $0.002 (same answer)AetherOS solution: Cosine similarity (threshold 0.92) detects semantic
 equivalence → serves cached answer → $0.000, no LLM callProblem 2 — LLM hallucination on domain knowledge
 LLM asked about YOUR system: makes up plausible-sounding wrong answersAetherOS solution: Qdrant vector retrieval injects real document
@@ -26,26 +26,28 @@ context into the prompt before LLM generation
 
 Measured locally with k6 · 10 concurrent VUs · 261 requests
 
-| Metric | With AetherOS Cache | Without Cache |
-|---|---|---|
-| Cache Hit Latency P95 | **358ms** | N/A |
-| LLM Generation Latency | ~2000-3000ms | ~2000-3000ms |
-| Cache Hit Rate | **95.8%** | 0% |
-| Error Rate | **0.00%** | — |
-| API Cost (261 requests) | **~$0.022** | **~$0.522** |
-| **Cost Reduction** | **95.8%** | baseline |
+| Metric                  | With AetherOS Cache | Without Cache |
+| ----------------------- | ------------------- | ------------- |
+| Cache Hit Latency P95   | **358ms**           | N/A           |
+| LLM Generation Latency  | ~2000-3000ms        | ~2000-3000ms  |
+| Cache Hit Rate          | **95.8%**           | 0%            |
+| Error Rate              | **0.00%**           | —             |
+| API Cost (261 requests) | **~$0.022**         | **~$0.522**   |
+| **Cost Reduction**      | **95.8%**           | baseline      |
 
 > **Note on latency:** The 275ms pipeline includes ~200-250ms for local
 > ONNX embedding inference via `fastembed-rs` (no API call). The cache
 > lookup itself is sub-1ms. The primary value of the cache is
-> **cost elimination** — a cache hit at 275ms saves a $0.002 
+> **cost elimination** — a cache hit at 275ms saves a $0.002
 > OpenAI API call and 2-3 seconds of LLM generation time.
 
 ---
 
 ## System Architecture
+
+```text
 ┌─────────────────────────────────────────────────────────────────┐
-│                         USER (Browser)                          │
+│                        USER (Browser)                           │
 └──────────────────────────────┬──────────────────────────────────┘
                                │ HTTPS POST /generate
                                ▼
@@ -65,9 +67,9 @@ Measured locally with k6 · 10 concurrent VUs · 261 requests
 │  │    prompt → 384-dim unit vector  (~200ms, $0.000)         │  │
 │  └──────────────────────────┬────────────────────────────────┘  │
 │                             │                                   │
-│             ┌───────────────▼───────────────┐                    │
+│             ┌───────────────▼───────────────┐                   │
 │             │     SEMANTIC CACHE LOOKUP     │                   │
-│             │   cosine_similarity ≥ 0.92?   │                    │
+│             │   cosine_similarity ≥ 0.92?   │                   │
 │             └──────────┬────────────┬───────┘                   │
 │                        │ HIT        │ MISS                      │
 │                        ▼            ▼                           │
@@ -87,63 +89,67 @@ Measured locally with k6 · 10 concurrent VUs · 261 requests
 │             │         SSE TOKEN STREAM → BROWSER             │  │
 │             └────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
-
----
+```
 
 ## Core Engineering Decisions
 
 ### Why Rust for the Gateway?
-Rust has **zero garbage collection pauses**. On a 275ms cache hit path, 
-a Go/JVM GC pause of 10-50ms is a meaningful latency spike. Rust also 
-runs `fastembed-rs` natively — embedding locally means no OpenAI 
+
+Rust has **zero garbage collection pauses**. On a 275ms cache hit path,
+a Go/JVM GC pause of 10-50ms is a meaningful latency spike. Rust also
+runs `fastembed-rs` natively — embedding locally means no OpenAI
 Embeddings API call, saving ~150ms and ~$0.0001 per request.
 
 ### Why Cosine Similarity at 0.92 Threshold?
-Chosen empirically: below 0.90 produces false positives (unrelated 
-topics match), above 0.95 misses clear paraphrases. `AllMiniLML6V2` 
-produces L2-normalized unit vectors, so cosine similarity reduces to 
+
+Chosen empirically: below 0.90 produces false positives (unrelated
+topics match), above 0.95 misses clear paraphrases. `AllMiniLML6V2`
+produces L2-normalized unit vectors, so cosine similarity reduces to
 a dot product — eliminating two `sqrt()` calls per comparison.
 
-### Why DashMap + Redis (Two Cache Layers)?DashMap (RAM):  Sub-millisecond O(N) cosine scan, 50K vector limit
-Redis (Disk):   Persistence across restarts, TTL preserved via Unix
+### Why DashMap + Redis (Two Cache Layers)?DashMap (RAM): Sub-millisecond O(N) cosine scan, 50K vector limit
+
+Redis (Disk): Persistence across restarts, TTL preserved via Unix
 timestamps (not reset on reboot)
-Upgrade path:   RedisVL + HNSW index when N > 50,000 vectors
+Upgrade path: RedisVL + HNSW index when N > 50,000 vectors
 
 ### Dual Transport Architecture
-The inter-service bridge was designed with **gRPC + Protocol Buffers** 
-for binary efficiency and strict typing. The deployed version uses 
+
+The inter-service bridge was designed with **gRPC + Protocol Buffers**
+for binary efficiency and strict typing. The deployed version uses
 **HTTP/SSE** for Cloudflare proxy compatibility on free-tier infrastructure.
 
-| | gRPC Branch (`enterprise-grpc`) | HTTP/SSE Branch (`main`) |
-|---|---|---|
-| Transport | HTTP/2 + Protobufs | HTTP/1.1 + SSE |
-| Payload | Binary (~60% smaller) | JSON/text |
-| Streaming | Native bidirectional | Server-sent events |
-| Use case | Private network deployment | Public cloud (Cloudflare) |
-| Status | Preserved, local demo | Deployed on Render |
+|           | gRPC Branch (`enterprise-grpc`) | HTTP/SSE Branch (`main`)  |
+| --------- | ------------------------------- | ------------------------- |
+| Transport | HTTP/2 + Protobufs              | HTTP/1.1 + SSE            |
+| Payload   | Binary (~60% smaller)           | JSON/text                 |
+| Streaming | Native bidirectional            | Server-sent events        |
+| Use case  | Private network deployment      | Public cloud (Cloudflare) |
+| Status    | Preserved, local demo           | Deployed on Render        |
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology | Why |
-|---|---|---|
-| **Gateway** | Rust, Axum, Tokio | Zero GC, fearless concurrency |
-| **Embeddings** | fastembed-rs, ONNX | Local inference, no API cost |
-| **Semantic Cache** | DashMap + Redis | RAM speed + restart persistence |
-| **Vector DB** | Qdrant | HNSW index, written in Rust |
-| **Rate Limiting** | Token Bucket (parking_lot) | Lock-free per-IP throttling |
-| **Cache Guard** | Bloom Filter (AtomicU64) | O(1) cache penetration prevention |
-| **AI Pipeline** | Python, FastAPI, LangChain | Unmatched AI ecosystem |
-| **LLM** | OpenAI gpt-4o-mini | Cost-efficient, streaming API |
-| **Frontend** | Next.js 16, Tailwind | SSE streaming, React Server Components |
-| **Deployment** | Render + Upstash + Qdrant Cloud + Vercel | Full cloud, free tier |
+| Layer              | Technology                               | Why                                    |
+| ------------------ | ---------------------------------------- | -------------------------------------- |
+| **Gateway**        | Rust, Axum, Tokio                        | Zero GC, fearless concurrency          |
+| **Embeddings**     | fastembed-rs, ONNX                       | Local inference, no API cost           |
+| **Semantic Cache** | DashMap + Redis                          | RAM speed + restart persistence        |
+| **Vector DB**      | Qdrant                                   | HNSW index, written in Rust            |
+| **Rate Limiting**  | Token Bucket (parking_lot)               | Lock-free per-IP throttling            |
+| **Cache Guard**    | Bloom Filter (AtomicU64)                 | O(1) cache penetration prevention      |
+| **AI Pipeline**    | Python, FastAPI, LangChain               | Unmatched AI ecosystem                 |
+| **LLM**            | OpenAI gpt-4o-mini                       | Cost-efficient, streaming API          |
+| **Frontend**       | Next.js 16, Tailwind                     | SSE streaming, React Server Components |
+| **Deployment**     | Render + Upstash + Qdrant Cloud + Vercel | Full cloud, free tier                  |
 
 ---
 
 ## Quick Start
 
 ### Prerequisites
+
 - Rust toolchain (stable)
 - Python 3.10+
 - Node.js 20+
@@ -151,7 +157,7 @@ for binary efficiency and strict typing. The deployed version uses
 
 ### Boot Sequence
 
-```bash1. Start infrastructure
+````bash1. Start infrastructure
 docker-compose up -d2. Ingest knowledge base into Qdrant
 cargo run --bin ingest3. Start Python Brain (Port 8000)
 cd brain
@@ -215,3 +221,4 @@ OPENAI_MODEL=gpt-4o-mini
 | Python Brain | Render | [aetheros-brain.onrender.com](YOUR_LINK) |
 | Redis Cache | Upstash | Managed |
 | Vector DB | Qdrant Cloud | Managed |
+````
