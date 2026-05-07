@@ -46,7 +46,7 @@ AetherOS strictly separates network orchestration from AI processing, utilizing 
   bash
   docker run -p 6379:6379 -d redis
   docker run -p 6334:6334 -p 6333:6333 -d qdrant/qdrant
-2. Boot the Python Brain (Port 50051)
+**2. Boot the Python Brain (Port 50051)
 
   Bash
   cd brain 
@@ -54,12 +54,12 @@ AetherOS strictly separates network orchestration from AI processing, utilizing 
   source venv/bin/activate  # Windows: .\venv\Scripts\activate 
   pip install -r requirements.txt 
   python src/main.py
-3. Boot the Rust Edge (Port 3000)
+**3. Boot the Rust Edge (Port 3000)
   (Ensure ONNX DLLs are in your path if on Windows)
   
   Bash
   cargo run
-4. Boot the Next.js UI (Port 3001)
+**4. Boot the Next.js UI (Port 3001)
 
   Bash
   cd web_ui 
