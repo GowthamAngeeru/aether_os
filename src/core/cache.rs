@@ -1,5 +1,3 @@
-// src/core/cache.rs
-
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -13,8 +11,6 @@ use tracing::{debug, info, warn};
 
 use crate::core::vector::{VectorEngine, SIMILARITY_THRESHOLD};
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 const MAX_CACHE_CAPACITY: usize = 50_000;
 const EVICTION_BATCH_SIZE: usize = 500;
 pub const DEFAULT_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -22,8 +18,6 @@ const CAPACITY_WARN_THRESHOLD: f64 = 0.80;
 
 const REDIS_KEY_PREFIX: &str = "aetheros:cache:";
 const REDIS_SCAN_PATTERN: &str = "aetheros:cache:*";
-
-// ─── Cache Entry ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 pub struct CachedEntry {
@@ -51,8 +45,6 @@ impl CachedEntry {
         self.inserted_at.elapsed() > ttl
     }
 }
-
-// ─── Redis Serialization Entry ───────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
 struct RedisEntry {
@@ -87,8 +79,6 @@ fn redis_key(prompt: &str) -> String {
     format!("{}{}", REDIS_KEY_PREFIX, prompt)
 }
 
-// ─── Cache Metrics ────────────────────────────────────────────────────────────
-
 #[derive(Debug, Default)]
 pub struct CacheMetrics {
     pub hits: AtomicU64,
@@ -111,22 +101,32 @@ impl CacheMetrics {
     }
 }
 
-// ─── Semantic Cache ───────────────────────────────────────────────────────────
-
 pub struct SemanticCache {
     store: DashMap<String, CachedEntry>,
     metrics: Arc<CacheMetrics>,
     capacity: usize,
     ttl: Duration,
     redis: Option<Arc<Mutex<ConnectionManager>>>,
+    similarity_threshold: f32,
 }
 
 impl SemanticCache {
     pub async fn new(redis_url: &str) -> Self {
-        Self::with_config_and_redis(MAX_CACHE_CAPACITY, DEFAULT_TTL, redis_url).await
+        Self::with_config_and_redis(
+            MAX_CACHE_CAPACITY,
+            DEFAULT_TTL,
+            redis_url,
+            SIMILARITY_THRESHOLD,
+        )
+        .await
     }
 
-    pub async fn with_config_and_redis(capacity: usize, ttl: Duration, redis_url: &str) -> Self {
+    pub async fn with_config_and_redis(
+        capacity: usize,
+        ttl: Duration,
+        redis_url: &str,
+        similarity_threshold: f32,
+    ) -> Self {
         assert!(capacity > 0, "SemanticCache: capacity must be > 0");
 
         let redis = match redis::Client::open(redis_url) {
@@ -140,11 +140,7 @@ impl SemanticCache {
                     Some(Arc::new(Mutex::new(mgr)))
                 }
                 Err(e) => {
-                    warn!(
-                        error = %e,
-                        "redis_connection_failed — RAM-only mode. \
-                         Restart server once Redis is available."
-                    );
+                    warn!(error = %e, "redis_connection_failed — RAM-only mode");
                     None
                 }
             },
@@ -156,6 +152,7 @@ impl SemanticCache {
             capacity,
             ttl,
             redis,
+            similarity_threshold,
         };
 
         cache.restore_from_redis().await;
@@ -163,6 +160,7 @@ impl SemanticCache {
         info!(
             capacity = capacity,
             ttl_secs = ttl.as_secs(),
+            similarity_threshold = similarity_threshold,
             max_ram_mb = (capacity * 2_200) / 1_048_576,
             "semantic_cache_initialized"
         );
@@ -178,6 +176,7 @@ impl SemanticCache {
             capacity,
             ttl,
             redis: None,
+            similarity_threshold: SIMILARITY_THRESHOLD,
         }
     }
 
@@ -263,8 +262,6 @@ impl SemanticCache {
         );
     }
 
-    // ── Public API ────────────────────────────────────────────────────────
-
     pub fn insert(&self, prompt: String, vector: Vec<f32>, response: String) {
         if self.store.len() >= self.capacity {
             self.evict_lru();
@@ -327,7 +324,7 @@ impl SemanticCache {
 
             let score = VectorEngine::cosine_similarity(query_vector, &cached.vector);
 
-            if score >= SIMILARITY_THRESHOLD && score > best_score {
+            if score >= self.similarity_threshold && score > best_score {
                 best_score = score;
                 best_key = Some(entry.key().clone());
             }

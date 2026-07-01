@@ -133,7 +133,7 @@ pub async fn generate_handler(
             context_chunks: vec![], // Sent embedded in the prompt above
         };
 
-        let mut brain_stream = match brain_client.generate(brain_request).await {
+        let brain_stream = match brain_client.generate(brain_request).await {
             Ok(s) => s,
             Err(e) => {
                 error!(request_id = %rid, error = %e, "brain_call_failed");

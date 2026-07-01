@@ -21,6 +21,7 @@ use crate::core::rate_limit::RateLimiter;
 use crate::core::vector::VectorEngine;
 use crate::middleware::shield::rate_limit_middleware;
 
+use aether_os::core::cache::DEFAULT_TTL;
 #[derive(Clone)]
 pub struct AppState {
     pub rate_limiter: Arc<RateLimiter>,
@@ -59,7 +60,6 @@ async fn main() {
         }
     };
 
-    // FIX: Wrap the entire state in an Arc before passing it to the router!
     let shared_state = Arc::new(state);
     let app = build_router(shared_state);
 
@@ -144,9 +144,16 @@ async fn build_state(config: Arc<AppConfig>) -> anyhow::Result<AppState> {
 
     let redis_url =
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    let semantic_cache = Arc::new(SemanticCache::new(&redis_url).await);
+    let semantic_cache = Arc::new(
+        SemanticCache::with_config_and_redis(
+            50_000,
+            DEFAULT_TTL,
+            &redis_url,
+            config.similarity_threshold,
+        )
+        .await,
+    );
 
-    // --- NEW HTTP BRAIN CONNECTION ---
     let brain_url =
         std::env::var("BRAIN_URL").unwrap_or_else(|_| "http://localhost:8000".to_string());
     info!(url = %brain_url, "brain_client_initializing");
@@ -154,7 +161,6 @@ async fn build_state(config: Arc<AppConfig>) -> anyhow::Result<AppState> {
     let brain_client = BrainClient::new(brain_url)
         .map_err(|e| anyhow::anyhow!("Failed to create brain client: {}", e))?;
 
-    // Keep-Alive Heartbeat to prevent Render Free Tier sleep
     let keepalive_client = brain_client.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(14 * 60));
@@ -193,37 +199,37 @@ async fn build_state(config: Arc<AppConfig>) -> anyhow::Result<AppState> {
     })
 }
 
-    fn build_router(state: Arc<AppState>) -> axum::Router {
-        use axum::http::header;
-        use axum::http::HeaderValue;
-        use axum::http::Method;
-        use tower_http::cors::CorsLayer;
-        use tower_http::trace::TraceLayer;
+fn build_router(state: Arc<AppState>) -> axum::Router {
+    use axum::http::header;
+    use axum::http::HeaderValue;
+    use axum::http::Method;
+    use tower_http::cors::CorsLayer;
+    use tower_http::trace::TraceLayer;
 
-        let rate_limiter = Arc::clone(&state.rate_limiter);
+    let rate_limiter = Arc::clone(&state.rate_limiter);
 
-        let frontend_url =
-            std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
+    let frontend_url =
+        std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
 
-        let origin = frontend_url
-            .parse::<HeaderValue>()
-            .expect("Invalid FRONTEND_URL");
+    let origin = frontend_url
+        .parse::<HeaderValue>()
+        .expect("Invalid FRONTEND_URL");
 
-        let cors = CorsLayer::new()
-            .allow_origin(origin)
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
-            .allow_credentials(true);
+    let cors = CorsLayer::new()
+        .allow_origin(origin)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
+        .allow_credentials(true);
 
-        api::routes::create_router()
-            //.layer(axum_middleware::from_fn_with_state(
-            //    rate_limiter,
-            //  rate_limit_middleware,
-            //))
-            .layer(TraceLayer::new_for_http())
-            .layer(cors)
-            .with_state(state)
-    }
+    api::routes::create_router()
+        .layer(axum_middleware::from_fn_with_state(
+            rate_limiter,
+            rate_limit_middleware,
+        ))
+        .layer(TraceLayer::new_for_http())
+        .layer(cors)
+        .with_state(state)
+}
 
 async fn shutdown_signal() {
     let ctrl_c = async {

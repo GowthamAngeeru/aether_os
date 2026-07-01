@@ -5,8 +5,7 @@
 > hit rate** under load, reducing OpenAI spend by up to **95.8%**
 > on repeated semantic queries.
 
-[![Demo Video](https://img.shields.io/badge/▶_Demo-YouTube-red?style=for-the-badge)](YOUR_YOUTUBE_LINK)
-[![Live App](https://img.shields.io/badge/Live-Vercel-black?style=for-the-badge)](YOUR_VERCEL_LINK)
+[Live App] https://aetheros-ui.vercel.app/
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-blue?style=for-the-badge)](./ARCHITECTURE.md)
 
 ---

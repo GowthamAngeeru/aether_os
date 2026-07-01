@@ -101,7 +101,7 @@ impl VectorEngine {
             return Ok(vec![]);
         }
 
-        let start = Instant::now();
+        let _start = Instant::now();
         let string_texts: Vec<String> = texts.into_iter().map(|s| s.to_string()).collect();
 
         let mut model_guard = self.model.lock().unwrap();
